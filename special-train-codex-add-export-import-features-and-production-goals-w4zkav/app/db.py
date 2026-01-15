@@ -466,52 +466,6 @@ def add_machine_to_line(line: str, machine: str) -> None:
         )
 
 
-def add_cell_to_line(line: str, cell: str) -> None:
-    line = (line or "").strip()
-    cell = (cell or "").strip()
-    if not line or not cell:
-        return
-    with connect() as conn:
-        conn.execute("INSERT OR IGNORE INTO lines(name) VALUES(?)", (line,))
-        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
-        if not row:
-            return
-        line_id = int(row["id"])
-        conn.execute(
-            "INSERT OR IGNORE INTO cells(line_id, name) VALUES(?, ?)",
-            (line_id, cell),
-        )
-
-
-def add_machine_to_cell(line: str, cell: str, machine: str) -> None:
-    line = (line or "").strip()
-    cell = (cell or "").strip()
-    machine = (machine or "").strip()
-    if not line or not cell or not machine:
-        return
-    with connect() as conn:
-        conn.execute("INSERT OR IGNORE INTO lines(name) VALUES(?)", (line,))
-        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
-        if not row:
-            return
-        line_id = int(row["id"])
-        conn.execute(
-            "INSERT OR IGNORE INTO cells(line_id, name) VALUES(?, ?)",
-            (line_id, cell),
-        )
-        cell_row = conn.execute(
-            "SELECT id FROM cells WHERE line_id=? AND name=?",
-            (line_id, cell),
-        ).fetchone()
-        if not cell_row:
-            return
-        cell_id = int(cell_row["id"])
-        conn.execute(
-            "INSERT OR IGNORE INTO machines(cell_id, name) VALUES(?, ?)",
-            (cell_id, machine),
-        )
-
-
 def delete_machine_from_line(line: str, machine: str) -> None:
     line = (line or "").strip()
     machine = (machine or "").strip()
@@ -590,6 +544,28 @@ def list_machines_for_cell(line: str, cell: str) -> List[str]:
         rows = conn.execute(
             "SELECT name FROM machines WHERE cell_id=? ORDER BY name",
             (cell_id,),
+        ).fetchall()
+        return [r["name"] for r in rows]
+
+
+def list_machines_for_line(line: str) -> List[str]:
+    with connect() as conn:
+        line = (line or "").strip()
+        if not line:
+            return []
+        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
+        if not row:
+            return []
+        line_id = row["id"]
+        rows = conn.execute(
+            """
+            SELECT DISTINCT m.name
+            FROM machines m
+            JOIN cells c ON c.id = m.cell_id
+            WHERE c.line_id=?
+            ORDER BY m.name
+            """,
+            (line_id,),
         ).fetchall()
         return [r["name"] for r in rows]
 
