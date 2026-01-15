@@ -1,10 +1,10 @@
 # app/storage.py
+from __future__ import annotations
 import os
 import json
 from datetime import datetime
 from typing import Any, Tuple, Optional
-
-import pandas as pd
+import math
 
 from .config import (
     DATA_DIR,
@@ -79,7 +79,7 @@ ENTRY_COLUMNS = [
 ]
 
 
-def ensure_df_schema(df: pd.DataFrame) -> pd.DataFrame:
+def ensure_df_schema(df):
     """
     Ensures df has all required columns and returns df ordered by ENTRY_COLUMNS.
     Missing columns are added as blank.
@@ -112,6 +112,8 @@ def get_df(filename: Optional[str] = None) -> Tuple[pd.DataFrame, str]:
     Load a month of entries from SQLite into DataFrame.
     Returns (df, month_key).
     """
+    import pandas as pd
+
     month = _normalize_month(filename)
     rows = fetch_tool_entries(month)
     if rows:
@@ -165,6 +167,8 @@ def save_df(df: pd.DataFrame, filename: str) -> None:
     Save DataFrame rows back to SQLite.
     filename is treated as month key (YYYY-MM).
     """
+    import pandas as pd
+
     df = ensure_df_schema(df)
     for _, row in df.iterrows():
         upsert_tool_entry(row.to_dict())
@@ -175,9 +179,11 @@ def save_df(df: pd.DataFrame, filename: str) -> None:
 # -----------------------------
 def safe_int(val: Any, default: int = 0) -> int:
     try:
-        if val is None or (isinstance(val, float) and pd.isna(val)):
+        if val is None or (isinstance(val, float) and math.isnan(val)):
             return default
         s = str(val).strip()
+        if s.lower() in {"nan", "<na>"}:
+            return default
         if s == "":
             return default
         return int(float(s))
@@ -186,9 +192,11 @@ def safe_int(val: Any, default: int = 0) -> int:
 
 def safe_float(val: Any, default: float = 0.0) -> float:
     try:
-        if val is None or (isinstance(val, float) and pd.isna(val)):
+        if val is None or (isinstance(val, float) and math.isnan(val)):
             return default
         s = str(val).strip()
+        if s.lower() in {"nan", "<na>"}:
+            return default
         if s == "":
             return default
         return float(s)

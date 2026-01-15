@@ -570,6 +570,28 @@ def list_machines_for_line(line: str) -> List[str]:
         return [r["name"] for r in rows]
 
 
+def list_machines_for_line(line: str) -> List[str]:
+    with connect() as conn:
+        line = (line or "").strip()
+        if not line:
+            return []
+        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
+        if not row:
+            return []
+        line_id = row["id"]
+        rows = conn.execute(
+            """
+            SELECT DISTINCT m.name
+            FROM machines m
+            JOIN cells c ON c.id = m.cell_id
+            WHERE c.line_id=?
+            ORDER BY m.name
+            """,
+            (line_id,),
+        ).fetchall()
+        return [r["name"] for r in rows]
+
+
 def list_parts_for_line(line: str) -> List[str]:
     with connect() as conn:
         line = (line or "").strip()
