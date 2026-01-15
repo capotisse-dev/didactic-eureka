@@ -7,8 +7,6 @@ import shutil
 
 from .storage import safe_float, safe_int
 from .db import (
-    add_line,
-    add_machine_to_line,
     list_tools_simple,
     upsert_tool_inventory,
     deactivate_tool,
@@ -80,14 +78,12 @@ class MasterDataUI(tk.Frame):
         tab_downtime = tk.Frame(nb, bg=controller.colors["bg"])
         tab_goals = tk.Frame(nb, bg=controller.colors["bg"])
         tab_machine_history = tk.Frame(nb, bg=controller.colors["bg"])
-        tab_line_machines = tk.Frame(nb, bg=controller.colors["bg"])
 
         nb.add(tab_tools, text="Tool Pricing")
         nb.add(tab_parts, text="Parts & Lines")
         nb.add(tab_scrap, text="Scrap Pricing")
         nb.add(tab_downtime, text="Downtime Codes")
         nb.add(tab_goals, text="Production Goals")
-        nb.add(tab_line_machines, text="Lines & Machines")
         nb.add(tab_machine_history, text="Machine History")
 
         self._build_tool_pricing(tab_tools)
@@ -95,7 +91,6 @@ class MasterDataUI(tk.Frame):
         self._build_scrap(tab_scrap)
         self._build_downtime(tab_downtime)
         self._build_production_goals(tab_goals)
-        self._build_line_machines(tab_line_machines)
         MachineHistoryUI(tab_machine_history, controller).pack(fill="both", expand=True)
         self._apply_readonly_master_data()
 
