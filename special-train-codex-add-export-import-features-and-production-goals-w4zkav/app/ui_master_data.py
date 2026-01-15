@@ -7,6 +7,9 @@ import shutil
 
 from .storage import safe_float, safe_int
 from .db import (
+    add_cell_to_line,
+    add_line,
+    add_machine_to_cell,
     list_tools_simple,
     upsert_tool_inventory,
     deactivate_tool,
@@ -32,6 +35,7 @@ from .db import (
     list_machines_for_cell,
     list_parts_for_line,
 )
+from .ui_machine_history import MachineHistoryUI
 from .audit import log_audit
 from .config import DB_PATH
 
@@ -75,18 +79,24 @@ class MasterDataUI(tk.Frame):
         tab_scrap = tk.Frame(nb, bg=controller.colors["bg"])
         tab_downtime = tk.Frame(nb, bg=controller.colors["bg"])
         tab_goals = tk.Frame(nb, bg=controller.colors["bg"])
+        tab_machine_history = tk.Frame(nb, bg=controller.colors["bg"])
+        tab_workflow = tk.Frame(nb, bg=controller.colors["bg"])
 
         nb.add(tab_tools, text="Tool Pricing")
         nb.add(tab_parts, text="Parts & Lines")
         nb.add(tab_scrap, text="Scrap Pricing")
         nb.add(tab_downtime, text="Downtime Codes")
         nb.add(tab_goals, text="Production Goals")
+        nb.add(tab_workflow, text="Workflow")
+        nb.add(tab_machine_history, text="Machine History")
 
         self._build_tool_pricing(tab_tools)
         self._build_parts(tab_parts)
         self._build_scrap(tab_scrap)
         self._build_downtime(tab_downtime)
         self._build_production_goals(tab_goals)
+        self._build_workflow(tab_workflow)
+        MachineHistoryUI(tab_machine_history, controller).pack(fill="both", expand=True)
         self._apply_readonly_master_data()
 
     def _apply_readonly_master_data(self):
@@ -815,6 +825,164 @@ class MasterDataUI(tk.Frame):
             self.goal_machine_var.set(machines[0])
         else:
             self.goal_machine_var.set("")
+    # -------------------- WORKFLOW --------------------
+    def _build_workflow(self, parent):
+        top = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=10)
+        top.pack(fill="x")
+
+        tk.Label(
+            top,
+            text="Workflow",
+            bg=self.controller.colors["bg"],
+            fg=self.controller.colors["fg"],
+            font=("Arial", 14, "bold"),
+        ).pack(side="left")
+
+        tk.Button(top, text="Refresh", command=self.refresh_workflow).pack(side="right")
+
+        line_frame = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=6)
+        line_frame.pack(fill="x")
+
+        tk.Label(line_frame, text="Add Line:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        self.workflow_line_var = tk.StringVar()
+        tk.Entry(line_frame, textvariable=self.workflow_line_var, width=20).pack(side="left", padx=6)
+        self.workflow_add_line_btn = tk.Button(line_frame, text="Add Line", command=self._add_workflow_line)
+        self.workflow_add_line_btn.pack(side="left")
+
+        cols = ("line",)
+        self.workflow_line_tree = ttk.Treeview(parent, columns=cols, show="headings", height=10)
+        self.workflow_line_tree.heading("line", text="LINE")
+        self.workflow_line_tree.column("line", width=220)
+        self.workflow_line_tree.pack(fill="x", expand=False, padx=10, pady=(0, 10))
+        self.workflow_line_tree.bind("<<TreeviewSelect>>", self._open_line_workflow)
+
+        self.refresh_workflow()
+        if self.readonly:
+            self.workflow_add_line_btn.configure(state="disabled")
+
+    def _add_workflow_line(self):
+        if self.readonly:
+            return
+        line = self.workflow_line_var.get().strip()
+        if not line:
+            messagebox.showerror("Error", "Line name is required.")
+            return
+        add_line(line)
+        log_audit(self.controller.user, f"Added line {line}")
+        self.workflow_line_var.set("")
+        self.refresh_workflow()
+
+    def refresh_workflow(self):
+        if not hasattr(self, "workflow_line_tree"):
+            return
+        for item in self.workflow_line_tree.get_children():
+            self.workflow_line_tree.delete(item)
+        for line in list_lines():
+            self.workflow_line_tree.insert("", "end", values=(line,))
+
+    def _open_line_workflow(self, event=None):
+        sel = self.workflow_line_tree.selection()
+        if not sel:
+            return
+        line = self.workflow_line_tree.item(sel[0], "values")[0]
+        if not line:
+            return
+
+        top = tk.Toplevel(self)
+        top.title(f"Workflow - {line}")
+        top.geometry("760x620")
+
+        header = tk.Frame(top, padx=10, pady=10)
+        header.pack(fill="x")
+        tk.Label(header, text=f"Line: {line}", font=("Arial", 12, "bold")).pack(side="left")
+
+        cell_frame = tk.Frame(top, padx=10, pady=6)
+        cell_frame.pack(fill="x")
+        tk.Label(cell_frame, text="Add Cell:").pack(side="left")
+        cell_var = tk.StringVar()
+        tk.Entry(cell_frame, textvariable=cell_var, width=20).pack(side="left", padx=6)
+
+        cell_cols = ("cell",)
+        cell_tree = ttk.Treeview(top, columns=cell_cols, show="headings", height=8)
+        cell_tree.heading("cell", text="CELL")
+        cell_tree.column("cell", width=240)
+        cell_tree.pack(fill="x", expand=False, padx=10, pady=(0, 10))
+
+        machine_label = tk.Label(top, text="Machines for selected cell:", font=("Arial", 10, "bold"))
+        machine_label.pack(anchor="w", padx=10)
+
+        machine_frame = tk.Frame(top, padx=10, pady=6)
+        machine_frame.pack(fill="x")
+        tk.Label(machine_frame, text="Add Machine:").pack(side="left")
+        machine_var = tk.StringVar()
+        tk.Entry(machine_frame, textvariable=machine_var, width=24).pack(side="left", padx=6)
+
+        machine_cols = ("machine",)
+        machine_tree = ttk.Treeview(top, columns=machine_cols, show="headings", height=8)
+        machine_tree.heading("machine", text="MACHINE")
+        machine_tree.column("machine", width=260)
+        machine_tree.pack(fill="x", expand=False, padx=10, pady=(0, 10))
+
+        def refresh_cells():
+            for item in cell_tree.get_children():
+                cell_tree.delete(item)
+            for cell in list_cells_for_line(line):
+                cell_tree.insert("", "end", values=(cell,))
+            if cell_tree.get_children():
+                first = cell_tree.get_children()[0]
+                cell_tree.selection_set(first)
+                load_machines_for_cell()
+
+        def load_machines_for_cell(event=None):
+            sel_cell = cell_tree.selection()
+            if not sel_cell:
+                return
+            selected_cell = cell_tree.item(sel_cell[0], "values")[0]
+            for item in machine_tree.get_children():
+                machine_tree.delete(item)
+            for machine in list_machines_for_cell(line, selected_cell):
+                machine_tree.insert("", "end", values=(machine,))
+
+        def add_cell():
+            if self.readonly:
+                return
+            cell = cell_var.get().strip()
+            if not cell:
+                messagebox.showerror("Error", "Cell name is required.")
+                return
+            add_cell_to_line(line, cell)
+            log_audit(self.controller.user, f"Added cell {cell} to line {line}")
+            cell_var.set("")
+            refresh_cells()
+
+        def add_machine():
+            if self.readonly:
+                return
+            sel_cell = cell_tree.selection()
+            if not sel_cell:
+                messagebox.showerror("Error", "Select a cell first.")
+                return
+            selected_cell = cell_tree.item(sel_cell[0], "values")[0]
+            machine = machine_var.get().strip()
+            if not machine:
+                messagebox.showerror("Error", "Machine name is required.")
+                return
+            add_machine_to_cell(line, selected_cell, machine)
+            log_audit(self.controller.user, f"Added machine {machine} to cell {selected_cell} ({line})")
+            machine_var.set("")
+            load_machines_for_cell()
+
+        add_cell_btn = tk.Button(cell_frame, text="Add Cell", command=add_cell)
+        add_cell_btn.pack(side="left")
+        add_machine_btn = tk.Button(machine_frame, text="Add Machine", command=add_machine)
+        add_machine_btn.pack(side="left")
+
+        cell_tree.bind("<<TreeviewSelect>>", load_machines_for_cell)
+        refresh_cells()
+
+        if self.readonly:
+            add_cell_btn.configure(state="disabled")
+            add_machine_btn.configure(state="disabled")
 
     def refresh_goals(self):
         if hasattr(self, "goal_tree"):
