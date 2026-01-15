@@ -11,7 +11,7 @@ from .db import (
     list_downtime_codes,
     list_lines,
     list_cells_for_line,
-    list_machines_for_cell,
+    list_machines_for_line,
     list_parts_for_line,
     replace_shift_downtime_entries,
     upsert_tool_entry,
@@ -218,8 +218,7 @@ class OperatorUI(tk.Frame):
 
     def _refresh_machine_options(self, event=None):
         line = self.shift_line_cb.get().strip()
-        cell = self.cell_cb.get().strip()
-        machines = list_machines_for_cell(line, cell)
+        machines = list_machines_for_line(line)
         self.machine_cb.configure(values=machines)
         if machines:
             self.machine_cb.set(machines[0])

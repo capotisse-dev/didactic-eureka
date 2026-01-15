@@ -7,6 +7,8 @@ import shutil
 
 from .storage import safe_float, safe_int
 from .db import (
+    add_line,
+    add_machine_to_line,
     list_tools_simple,
     upsert_tool_inventory,
     deactivate_tool,
@@ -29,9 +31,11 @@ from .db import (
     list_production_goals,
     upsert_production_goal,
     list_cells_for_line,
-    list_machines_for_cell,
+    list_machines_for_line,
     list_parts_for_line,
+    delete_machine_from_line,
 )
+from .ui_machine_history import MachineHistoryUI
 from .audit import log_audit
 from .config import DB_PATH
 
@@ -75,18 +79,24 @@ class MasterDataUI(tk.Frame):
         tab_scrap = tk.Frame(nb, bg=controller.colors["bg"])
         tab_downtime = tk.Frame(nb, bg=controller.colors["bg"])
         tab_goals = tk.Frame(nb, bg=controller.colors["bg"])
+        tab_machine_history = tk.Frame(nb, bg=controller.colors["bg"])
+        tab_line_machines = tk.Frame(nb, bg=controller.colors["bg"])
 
         nb.add(tab_tools, text="Tool Pricing")
         nb.add(tab_parts, text="Parts & Lines")
         nb.add(tab_scrap, text="Scrap Pricing")
         nb.add(tab_downtime, text="Downtime Codes")
         nb.add(tab_goals, text="Production Goals")
+        nb.add(tab_line_machines, text="Lines & Machines")
+        nb.add(tab_machine_history, text="Machine History")
 
         self._build_tool_pricing(tab_tools)
         self._build_parts(tab_parts)
         self._build_scrap(tab_scrap)
         self._build_downtime(tab_downtime)
         self._build_production_goals(tab_goals)
+        self._build_line_machines(tab_line_machines)
+        MachineHistoryUI(tab_machine_history, controller).pack(fill="both", expand=True)
         self._apply_readonly_master_data()
 
     def _apply_readonly_master_data(self):
@@ -808,13 +818,132 @@ class MasterDataUI(tk.Frame):
 
     def _refresh_goal_machine_fields(self, event=None):
         line = self.goal_line_var.get().strip()
-        cell = self.goal_cell_var.get().strip()
-        machines = list_machines_for_cell(line, cell)
+        machines = list_machines_for_line(line)
         self.goal_machine_combo.configure(values=machines)
         if machines:
             self.goal_machine_var.set(machines[0])
         else:
             self.goal_machine_var.set("")
+
+    # -------------------- LINES & MACHINES --------------------
+    def _build_line_machines(self, parent):
+        top = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=10)
+        top.pack(fill="x")
+
+        tk.Label(
+            top,
+            text="Lines & Machines",
+            bg=self.controller.colors["bg"],
+            fg=self.controller.colors["fg"],
+            font=("Arial", 14, "bold"),
+        ).pack(side="left")
+
+        tk.Button(top, text="Refresh", command=self.refresh_line_machines).pack(side="right")
+
+        form = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=6)
+        form.pack(fill="x")
+
+        tk.Label(form, text="Line:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        self.machine_line_var = tk.StringVar(value="")
+        self.machine_line_combo = ttk.Combobox(
+            form,
+            values=list_lines(),
+            textvariable=self.machine_line_var,
+            state="readonly",
+            width=18,
+        )
+        self.machine_line_combo.pack(side="left", padx=6)
+        self.machine_line_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_line_machines())
+
+        tk.Label(form, text="Add Line:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        self.add_line_var = tk.StringVar()
+        tk.Entry(form, textvariable=self.add_line_var, width=18).pack(side="left", padx=6)
+        self.add_line_btn = tk.Button(form, text="Add Line", command=self._add_line)
+        self.add_line_btn.pack(side="left")
+
+        add_machine_frame = tk.Frame(parent, bg=self.controller.colors["bg"], padx=10, pady=6)
+        add_machine_frame.pack(fill="x")
+
+        tk.Label(add_machine_frame, text="Machine Name:", bg=self.controller.colors["bg"], fg=self.controller.colors["fg"]).pack(side="left")
+        self.add_machine_var = tk.StringVar()
+        tk.Entry(add_machine_frame, textvariable=self.add_machine_var, width=24).pack(side="left", padx=6)
+        self.add_machine_btn = tk.Button(add_machine_frame, text="Add Machine", command=self._add_machine)
+        self.add_machine_btn.pack(side="left")
+
+        cols = ("line", "machine")
+        self.machine_tree = ttk.Treeview(parent, columns=cols, show="headings", height=14)
+        self.machine_tree.heading("line", text="LINE")
+        self.machine_tree.heading("machine", text="MACHINE")
+        self.machine_tree.column("line", width=180)
+        self.machine_tree.column("machine", width=240)
+        self.machine_tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.machine_del_btn = tk.Button(parent, text="Delete Selected", command=self._delete_selected_machine)
+        self.machine_del_btn.pack(anchor="e", padx=10, pady=(0, 10))
+
+        self.refresh_line_machines()
+        if self.readonly:
+            self.add_line_btn.configure(state="disabled")
+            self.add_machine_btn.configure(state="disabled")
+            self.machine_del_btn.configure(state="disabled")
+
+    def _add_line(self):
+        if self.readonly:
+            return
+        line = self.add_line_var.get().strip()
+        if not line:
+            messagebox.showerror("Error", "Line name is required.")
+            return
+        add_line(line)
+        log_audit(self.controller.user, f"Added line {line}")
+        self.add_line_var.set("")
+        self.refresh_line_machines()
+
+    def _add_machine(self):
+        if self.readonly:
+            return
+        line = self.machine_line_var.get().strip()
+        if not line:
+            messagebox.showerror("Error", "Select a line first.")
+            return
+        machine = self.add_machine_var.get().strip()
+        if not machine:
+            messagebox.showerror("Error", "Machine name is required.")
+            return
+        add_machine_to_line(line, machine)
+        log_audit(self.controller.user, f"Added machine {machine} to line {line}")
+        self.add_machine_var.set("")
+        self.refresh_line_machines()
+
+    def _delete_selected_machine(self):
+        if self.readonly:
+            return
+        sel = self.machine_tree.selection()
+        if not sel:
+            return
+        line, machine = self.machine_tree.item(sel[0], "values")
+        if not messagebox.askyesno("Confirm", f"Delete machine '{machine}' from line '{line}'?"):
+            return
+        delete_machine_from_line(line, machine)
+        log_audit(self.controller.user, f"Deleted machine {machine} from line {line}")
+        self.refresh_line_machines()
+
+    def refresh_line_machines(self):
+        if not hasattr(self, "machine_tree"):
+            return
+        for item in self.machine_tree.get_children():
+            self.machine_tree.delete(item)
+
+        lines = list_lines()
+        self.machine_line_combo.configure(values=lines)
+        if lines and self.machine_line_var.get() not in lines:
+            self.machine_line_var.set(lines[0])
+
+        line = self.machine_line_var.get().strip()
+        if not line:
+            return
+        for machine in list_machines_for_line(line):
+            self.machine_tree.insert("", "end", values=(line, machine))
 
     def refresh_goals(self):
         if hasattr(self, "goal_tree"):
