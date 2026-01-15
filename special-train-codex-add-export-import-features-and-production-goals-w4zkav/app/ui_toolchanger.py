@@ -8,7 +8,15 @@ from .ui_audit import AuditTrailUI
 from .screen_registry import get_screen_class
 from .storage import next_id, safe_int, safe_float, load_json, parts_for_line
 from .config import REASONS_FILE
-from .db import get_tool, update_tool_stock, upsert_tool_entry, list_tools_for_line, list_tool_inserts
+from .db import (
+    get_tool,
+    update_tool_stock,
+    upsert_tool_entry,
+    list_tools_for_line,
+    list_tool_inserts,
+    list_lines,
+    list_machines_for_line,
+)
 from .audit import log_audit
 
 class ToolChangerUI(tk.Frame):
@@ -56,7 +64,8 @@ class ToolChangerUI(tk.Frame):
 
         # Line
         tk.Label(body, text="Line:", **style).grid(row=1, column=0, sticky="e", pady=5)
-        self.line_cb = ttk.Combobox(body, values=["U725", "JL"], state="readonly", width=20)
+        line_options = list_lines() or ["U725", "JL"]
+        self.line_cb = ttk.Combobox(body, values=line_options, state="readonly", width=20)
         self.line_cb.current(0)
         self.line_cb.grid(row=1, column=1, sticky="w")
         self.line_cb.bind("<<ComboboxSelected>>", self.update_machines)
@@ -136,10 +145,7 @@ class ToolChangerUI(tk.Frame):
 
     def update_machines(self, event=None):
         line = self.line_cb.get()
-        if line == "U725":
-            machs = [f"Machine {i}" for i in range(1, 10)]
-        else:
-            machs = [f"Machine {i}" for i in range(1, 9)] + ["FF1", "FF2", "FF3"]
+        machs = list_machines_for_line(line)
         self.mach_cb["values"] = machs
         self.mach_cb.set("")
         self.tool_cb.set("")

@@ -436,6 +436,78 @@ def list_lines() -> List[str]:
         return [r["name"] for r in rows]
 
 
+def add_line(line: str) -> None:
+    line = (line or "").strip()
+    if not line:
+        return
+    with connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO lines(name) VALUES(?)", (line,))
+        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
+        if not row:
+            return
+        _ensure_default_cell(conn, int(row["id"]))
+
+
+def add_machine_to_line(line: str, machine: str) -> None:
+    line = (line or "").strip()
+    machine = (machine or "").strip()
+    if not line or not machine:
+        return
+    with connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO lines(name) VALUES(?)", (line,))
+        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
+        if not row:
+            return
+        line_id = int(row["id"])
+        cell_id = _ensure_default_cell(conn, line_id)
+        conn.execute(
+            "INSERT OR IGNORE INTO machines(cell_id, name) VALUES(?, ?)",
+            (cell_id, machine),
+        )
+
+
+def delete_machine_from_line(line: str, machine: str) -> None:
+    line = (line or "").strip()
+    machine = (machine or "").strip()
+    if not line or not machine:
+        return
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
+        if not row:
+            return
+        line_id = int(row["id"])
+        conn.execute(
+            """
+            DELETE FROM machines
+            WHERE name=?
+              AND cell_id IN (
+                SELECT c.id
+                FROM cells c
+                WHERE c.line_id=?
+              )
+            """,
+            (machine, line_id),
+        )
+
+
+def _ensure_default_cell(conn: sqlite3.Connection, line_id: int) -> int:
+    row = conn.execute(
+        "SELECT id FROM cells WHERE line_id=? ORDER BY id LIMIT 1",
+        (line_id,),
+    ).fetchone()
+    if row:
+        return int(row["id"])
+    conn.execute(
+        "INSERT OR IGNORE INTO cells(line_id, name) VALUES(?, ?)",
+        (line_id, "Default"),
+    )
+    row = conn.execute(
+        "SELECT id FROM cells WHERE line_id=? AND name=?",
+        (line_id, "Default"),
+    ).fetchone()
+    return int(row["id"]) if row else 0
+
+
 def list_cells_for_line(line: str) -> List[str]:
     with connect() as conn:
         line = (line or "").strip()
