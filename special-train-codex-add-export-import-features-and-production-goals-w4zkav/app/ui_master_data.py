@@ -32,6 +32,7 @@ from .db import (
     list_machines_for_cell,
     list_parts_for_line,
 )
+from .ui_machine_history import MachineHistoryUI
 from .audit import log_audit
 from .config import DB_PATH
 
@@ -75,18 +76,21 @@ class MasterDataUI(tk.Frame):
         tab_scrap = tk.Frame(nb, bg=controller.colors["bg"])
         tab_downtime = tk.Frame(nb, bg=controller.colors["bg"])
         tab_goals = tk.Frame(nb, bg=controller.colors["bg"])
+        tab_machine_history = tk.Frame(nb, bg=controller.colors["bg"])
 
         nb.add(tab_tools, text="Tool Pricing")
         nb.add(tab_parts, text="Parts & Lines")
         nb.add(tab_scrap, text="Scrap Pricing")
         nb.add(tab_downtime, text="Downtime Codes")
         nb.add(tab_goals, text="Production Goals")
+        nb.add(tab_machine_history, text="Machine History")
 
         self._build_tool_pricing(tab_tools)
         self._build_parts(tab_parts)
         self._build_scrap(tab_scrap)
         self._build_downtime(tab_downtime)
         self._build_production_goals(tab_goals)
+        MachineHistoryUI(tab_machine_history, controller).pack(fill="both", expand=True)
         self._apply_readonly_master_data()
 
     def _apply_readonly_master_data(self):
