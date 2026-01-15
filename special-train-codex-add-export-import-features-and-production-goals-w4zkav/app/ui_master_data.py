@@ -7,6 +7,9 @@ import shutil
 
 from .storage import safe_float, safe_int
 from .db import (
+    add_cell_to_line,
+    add_line,
+    add_machine_to_cell,
     list_tools_simple,
     upsert_tool_inventory,
     deactivate_tool,
