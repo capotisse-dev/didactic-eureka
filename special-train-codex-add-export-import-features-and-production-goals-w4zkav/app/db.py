@@ -277,8 +277,35 @@ def init_db() -> None:
         FOREIGN KEY(part_id) REFERENCES parts(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS machine_documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        line_code TEXT NOT NULL,
+        machine_code TEXT NOT NULL,
+        doc_type TEXT NOT NULL,
+        doc_name TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_by TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE TABLE IF NOT EXISTS machine_document_revisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        document_id INTEGER NOT NULL,
+        revision_number INTEGER NOT NULL,
+        stored_path TEXT NOT NULL,
+        original_filename TEXT NOT NULL DEFAULT '',
+        file_hash TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_by TEXT NOT NULL DEFAULT '',
+        notes TEXT,
+        FOREIGN KEY(document_id) REFERENCES machine_documents(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_parts_active ON parts(is_active);
     CREATE INDEX IF NOT EXISTS idx_tools_active ON tools(is_active);
+    CREATE INDEX IF NOT EXISTS idx_machine_documents_line_machine_type ON machine_documents(line_code, machine_code, doc_type);
+    CREATE INDEX IF NOT EXISTS idx_machine_document_revisions_doc_rev ON machine_document_revisions(document_id, revision_number);
+    CREATE INDEX IF NOT EXISTS idx_machine_document_revisions_hash ON machine_document_revisions(file_hash);
     """
     with connect() as conn:
         conn.executescript(schema)
@@ -409,6 +436,124 @@ def list_lines() -> List[str]:
         return [r["name"] for r in rows]
 
 
+def add_line(line: str) -> None:
+    line = (line or "").strip()
+    if not line:
+        return
+    with connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO lines(name) VALUES(?)", (line,))
+        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
+        if not row:
+            return
+        _ensure_default_cell(conn, int(row["id"]))
+
+
+def add_machine_to_line(line: str, machine: str) -> None:
+    line = (line or "").strip()
+    machine = (machine or "").strip()
+    if not line or not machine:
+        return
+    with connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO lines(name) VALUES(?)", (line,))
+        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
+        if not row:
+            return
+        line_id = int(row["id"])
+        cell_id = _ensure_default_cell(conn, line_id)
+        conn.execute(
+            "INSERT OR IGNORE INTO machines(cell_id, name) VALUES(?, ?)",
+            (cell_id, machine),
+        )
+
+
+def add_cell_to_line(line: str, cell: str) -> None:
+    line = (line or "").strip()
+    cell = (cell or "").strip()
+    if not line or not cell:
+        return
+    with connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO lines(name) VALUES(?)", (line,))
+        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
+        if not row:
+            return
+        line_id = int(row["id"])
+        conn.execute(
+            "INSERT OR IGNORE INTO cells(line_id, name) VALUES(?, ?)",
+            (line_id, cell),
+        )
+
+
+def add_machine_to_cell(line: str, cell: str, machine: str) -> None:
+    line = (line or "").strip()
+    cell = (cell or "").strip()
+    machine = (machine or "").strip()
+    if not line or not cell or not machine:
+        return
+    with connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO lines(name) VALUES(?)", (line,))
+        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
+        if not row:
+            return
+        line_id = int(row["id"])
+        conn.execute(
+            "INSERT OR IGNORE INTO cells(line_id, name) VALUES(?, ?)",
+            (line_id, cell),
+        )
+        cell_row = conn.execute(
+            "SELECT id FROM cells WHERE line_id=? AND name=?",
+            (line_id, cell),
+        ).fetchone()
+        if not cell_row:
+            return
+        cell_id = int(cell_row["id"])
+        conn.execute(
+            "INSERT OR IGNORE INTO machines(cell_id, name) VALUES(?, ?)",
+            (cell_id, machine),
+        )
+
+
+def delete_machine_from_line(line: str, machine: str) -> None:
+    line = (line or "").strip()
+    machine = (machine or "").strip()
+    if not line or not machine:
+        return
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
+        if not row:
+            return
+        line_id = int(row["id"])
+        conn.execute(
+            """
+            DELETE FROM machines
+            WHERE name=?
+              AND cell_id IN (
+                SELECT c.id
+                FROM cells c
+                WHERE c.line_id=?
+              )
+            """,
+            (machine, line_id),
+        )
+
+
+def _ensure_default_cell(conn: sqlite3.Connection, line_id: int) -> int:
+    row = conn.execute(
+        "SELECT id FROM cells WHERE line_id=? ORDER BY id LIMIT 1",
+        (line_id,),
+    ).fetchone()
+    if row:
+        return int(row["id"])
+    conn.execute(
+        "INSERT OR IGNORE INTO cells(line_id, name) VALUES(?, ?)",
+        (line_id, "Default"),
+    )
+    row = conn.execute(
+        "SELECT id FROM cells WHERE line_id=? AND name=?",
+        (line_id, "Default"),
+    ).fetchone()
+    return int(row["id"]) if row else 0
+
+
 def list_cells_for_line(line: str) -> List[str]:
     with connect() as conn:
         line = (line or "").strip()
@@ -445,6 +590,28 @@ def list_machines_for_cell(line: str, cell: str) -> List[str]:
         rows = conn.execute(
             "SELECT name FROM machines WHERE cell_id=? ORDER BY name",
             (cell_id,),
+        ).fetchall()
+        return [r["name"] for r in rows]
+
+
+def list_machines_for_line(line: str) -> List[str]:
+    with connect() as conn:
+        line = (line or "").strip()
+        if not line:
+            return []
+        row = conn.execute("SELECT id FROM lines WHERE name=?", (line,)).fetchone()
+        if not row:
+            return []
+        line_id = row["id"]
+        rows = conn.execute(
+            """
+            SELECT DISTINCT m.name
+            FROM machines m
+            JOIN cells c ON c.id = m.cell_id
+            WHERE c.line_id=?
+            ORDER BY m.name
+            """,
+            (line_id,),
         ).fetchall()
         return [r["name"] for r in rows]
 
@@ -1341,3 +1508,190 @@ def set_ncr_status(ncr_id: str, status: str) -> None:
             """,
             (status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), close_date, ncr_id),
         )
+
+
+def _now_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def create_machine_document(
+    line_code: str,
+    machine_code: str,
+    doc_type: str,
+    doc_name: str,
+    created_by: str,
+) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO machine_documents(line_code, machine_code, doc_type, doc_name, created_at, created_by)
+            VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (line_code, machine_code, doc_type, doc_name, _now_timestamp(), created_by or ""),
+        )
+        return int(cur.lastrowid)
+
+
+def set_machine_document_active(document_id: int, is_active: bool) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE machine_documents SET is_active=? WHERE id=?",
+            (1 if is_active else 0, document_id),
+        )
+
+
+def get_next_machine_document_revision_number(document_id: int) -> int:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT MAX(revision_number) AS max_rev
+            FROM machine_document_revisions
+            WHERE document_id=?
+            """,
+            (document_id,),
+        ).fetchone()
+        max_rev = row["max_rev"] if row and row["max_rev"] is not None else 0
+        return int(max_rev) + 1
+
+
+def add_machine_document_revision(
+    document_id: int,
+    revision_number: int,
+    stored_path: str,
+    original_filename: str,
+    file_hash: str,
+    created_by: str,
+    notes: str | None = None,
+) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO machine_document_revisions(
+                document_id,
+                revision_number,
+                stored_path,
+                original_filename,
+                file_hash,
+                created_at,
+                created_by,
+                notes
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                document_id,
+                revision_number,
+                stored_path,
+                original_filename or "",
+                file_hash or "",
+                _now_timestamp(),
+                created_by or "",
+                notes,
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def list_machine_document_revisions(document_id: int) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, revision_number, stored_path, original_filename, file_hash, created_at, created_by, notes
+            FROM machine_document_revisions
+            WHERE document_id=?
+            ORDER BY revision_number DESC
+            """,
+            (document_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def find_machine_document_by_name_or_hash(
+    line_code: str,
+    machine_code: str,
+    doc_type: str,
+    doc_name: str,
+    file_hash: str,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT d.*
+            FROM machine_documents d
+            LEFT JOIN machine_document_revisions r ON r.document_id = d.id
+            WHERE d.line_code=?
+              AND d.machine_code=?
+              AND d.doc_type=?
+              AND d.is_active=1
+              AND (lower(d.doc_name)=lower(?) OR r.file_hash=?)
+            ORDER BY d.id
+            LIMIT 1
+            """,
+            (line_code, machine_code, doc_type, doc_name, file_hash),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_machine_documents(
+    line_code: str,
+    machine_code: str,
+    doc_type: str | None = None,
+    search: str | None = None,
+    include_inactive: bool = False,
+) -> List[Dict[str, Any]]:
+    filters = ["d.line_code=?", "d.machine_code=?"]
+    params: List[Any] = [line_code, machine_code]
+    if doc_type:
+        filters.append("d.doc_type=?")
+        params.append(doc_type)
+    if not include_inactive:
+        filters.append("d.is_active=1")
+    if search:
+        filters.append(
+            """
+            (
+                lower(d.doc_name) LIKE ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM machine_document_revisions r2
+                    WHERE r2.document_id = d.id
+                      AND (
+                        lower(r2.original_filename) LIKE ?
+                        OR lower(COALESCE(r2.notes, '')) LIKE ?
+                      )
+                )
+            )
+            """
+        )
+        like = f"%{search.lower()}%"
+        params.extend([like, like, like])
+    where_clause = " AND ".join(filters) if filters else "1=1"
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                d.id,
+                d.line_code,
+                d.machine_code,
+                d.doc_type,
+                d.doc_name,
+                d.is_active,
+                d.created_at,
+                d.created_by,
+                r.revision_number AS current_revision,
+                r.created_at AS revision_created_at,
+                r.created_by AS revision_created_by
+            FROM machine_documents d
+            LEFT JOIN machine_document_revisions r ON r.id = (
+                SELECT id
+                FROM machine_document_revisions
+                WHERE document_id = d.id
+                ORDER BY revision_number DESC
+                LIMIT 1
+            )
+            WHERE {where_clause}
+            ORDER BY d.doc_name
+            """,
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
